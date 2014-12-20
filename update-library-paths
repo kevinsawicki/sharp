@@ -1,0 +1,90 @@
+#!/usr/bin/env node
+
+var ChildProcess = require('child_process');
+var fs           = require('fs');
+var path         = require('path');
+
+var sharpPath = path.join(__dirname, 'build', 'Release', 'sharp.node');
+var processedLibraries = {};
+
+if (!fs.existsSync(path.join(__dirname, 'vendor')))
+  fs.mkdirSync(path.join(__dirname, 'vendor'));
+
+var handleError = function(error, stderr) {
+  if (error)
+    console.error(error.message);
+
+  if (stderr)
+    console.error(stderr);
+
+  if (error || stderr)
+    process.exit(1);
+};
+
+var copyLibrary = function(library, callback) {
+  var vendorPath = getVendorPath(library);
+  if (fs.existsSync(vendorPath)) return callback();
+
+  var name = path.basename(library);
+  fs.readFile(library, function(error, data) {
+    handleError(error);
+    fs.writeFile(vendorPath, data, function(error) {
+      handleError(error);
+      callback();
+    });
+  });
+}
+
+var updateLibaryPath = function(library, linkedLibrary, callback) {
+  var name = path.basename(linkedLibrary);
+  var vendorPath = getVendorPath(linkedLibrary);
+  var newPath = '@loader_path/' + path.relative(path.dirname(library), vendorPath);
+  ChildProcess.exec('install_name_tool -change ' + linkedLibrary + ' ' + newPath + ' ' + library, function (error, stdout, stderr) {
+    handleError(error, stderr);
+    callback();
+  });
+};
+
+var getVendorPath = function(library) {
+  var name = path.basename(library);
+  return path.join(__dirname, 'vendor', name);
+};
+
+var getLibraries = function(library, callback) {
+  ChildProcess.exec('otool -L ' + library, function (error, stdout, stderr) {
+    handleError(error, stderr);
+
+    var libraries = stdout.split('\n').splice(1).map(function(line) {
+      return line.replace(/\(compatibility version .*$/, '');
+    }).map(function(line) {
+      return line.trim();
+    }).filter(function(line) {
+      return line.length > 0;
+    }).filter(function(line) {
+      return line.indexOf('/usr/local') === 0;
+    });
+    callback(libraries);
+  });
+};
+
+var processLibrary = function(library, callback) {
+  if (processedLibraries.hasOwnProperty(library)) return callback();
+  processedLibraries[library] = true;
+
+  getLibraries(library, function(libraries) {
+    var convertLibrary = function(linkedLibrary) {
+      if (!linkedLibrary) return callback();
+
+      copyLibrary(linkedLibrary, function() {
+        updateLibaryPath(library, linkedLibrary, function() {
+          processLibrary(getVendorPath(linkedLibrary), function() {
+            convertLibrary(libraries.shift());
+          });
+        });
+      });
+    };
+    convertLibrary(libraries.shift());
+  });
+};
+
+processLibrary(sharpPath, function() {});

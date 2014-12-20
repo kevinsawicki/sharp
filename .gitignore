@@ -5,6 +5,7 @@ test/bench/node_modules
 test/fixtures/output.*
 test/leak/libvips.supp
 npm-debug.log
+vendor
 
 # Mac OS X
 .DS_Store
